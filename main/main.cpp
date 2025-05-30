@@ -16,7 +16,6 @@
 #include "LittleFS.h"
 #include "HK_HomeKit.h"
 #include "config.h"
-#include "mqtt_client.h"
 #include "esp_app_desc.h"
 #include "pins_arduino.h"
 #include "NFC_SERV_CHARS.h"
@@ -152,51 +151,6 @@ namespace eth_config_ns {
 
 namespace espConfig
 {
-  struct mqttConfig_t
-  {
-    mqttConfig_t() {
-      std::string id = platform_create_id_string();
-      mqttClientId = id;
-      lwtTopic.append(id).append("/" MQTT_LWT_TOPIC);
-      hkTopic.append(id).append("/" MQTT_AUTH_TOPIC);
-      lockStateTopic.append(id).append("/" MQTT_STATE_TOPIC);
-      lockStateCmd.append(id).append("/" MQTT_SET_STATE_TOPIC);
-      lockCStateCmd.append(id).append("/" MQTT_SET_CURRENT_STATE_TOPIC);
-      lockTStateCmd.append(id).append("/" MQTT_SET_TARGET_STATE_TOPIC);
-      lockCustomStateTopic.append(id).append("/" MQTT_CUSTOM_STATE_TOPIC);
-      lockCustomStateCmd.append(id).append("/" MQTT_CUSTOM_STATE_CTRL_TOPIC);
-      btrLvlCmdTopic.append(id).append("/" MQTT_PROX_BAT_TOPIC);
-      hkAltActionTopic.append(id).append("/" MQTT_HK_ALT_ACTION_TOPIC);
-    }
-    /* MQTT Broker */
-    std::string mqttBroker = MQTT_HOST;
-    uint16_t mqttPort = MQTT_PORT;
-    std::string mqttUsername = MQTT_USERNAME;
-    std::string mqttPassword = MQTT_PASSWORD;
-    std::string mqttClientId;
-    /* MQTT Topics */
-    std::string lwtTopic;
-    std::string hkTopic;
-    std::string lockStateTopic;
-    std::string lockStateCmd;
-    std::string lockCStateCmd;
-    std::string lockTStateCmd;
-    std::string btrLvlCmdTopic;
-    std::string hkAltActionTopic;
-    /* MQTT Custom State */
-    std::string lockCustomStateTopic;
-    std::string lockCustomStateCmd;
-    /* Flags */
-    bool lockEnableCustomState = MQTT_CUSTOM_STATE_ENABLED;
-    bool hassMqttDiscoveryEnabled = MQTT_DISCOVERY;
-    bool nfcTagNoPublish = false;
-    std::map<std::string, int> customLockStates = { {"C_LOCKED", C_LOCKED}, {"C_UNLOCKING", C_UNLOCKING}, {"C_UNLOCKED", C_UNLOCKED}, {"C_LOCKING", C_LOCKING}, {"C_JAMMED", C_JAMMED}, {"C_UNKNOWN", C_UNKNOWN} };
-    std::map<std::string, int> customLockActions = { {"UNLOCK", UNLOCK}, {"LOCK", LOCK} };
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(espConfig::mqttConfig_t, mqttBroker, mqttPort, mqttUsername, mqttPassword, mqttClientId, lwtTopic, hkTopic, lockStateTopic,
-      lockStateCmd, lockCStateCmd, lockTStateCmd, lockCustomStateTopic, lockCustomStateCmd, lockEnableCustomState, hassMqttDiscoveryEnabled, customLockStates, customLockActions,
-      nfcTagNoPublish, btrLvlCmdTopic, hkAltActionTopic)
-  } mqttData;
-
   struct misc_config_t
   {
     enum colorMap
@@ -278,7 +232,6 @@ SpanCharacteristic* lockCurrentState;
 SpanCharacteristic* lockTargetState;
 SpanCharacteristic* statusLowBtr;
 SpanCharacteristic* btrLevel;
-esp_mqtt_client_handle_t client = nullptr;
 
 std::shared_ptr<Pixel> pixel;
 
@@ -409,9 +362,6 @@ void gpio_task(void* arg) {
               digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionUnlockState);
             }
             lockCurrentState->setVal(lockStates::UNLOCKED);
-            if (client != nullptr) {
-              esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::UNLOCKED).c_str(), 1, 0, false);
-            } else LOG(W, "MQTT Client not initialized, cannot publish message");
 
             if (static_cast<uint8_t>(espConfig::miscConfig.gpioActionMomentaryEnabled) & status.source) {
               delay(espConfig::miscConfig.gpioActionMomentaryTimeout);
@@ -420,9 +370,6 @@ void gpio_task(void* arg) {
                 digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionLockState);
               }
               lockCurrentState->setVal(lockStates::LOCKED);
-              if (client != nullptr) {
-                esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::LOCKED).c_str(), 1, 0, false);
-              } else LOG(W, "MQTT Client not initialized, cannot publish message");
             }
           } else if (espConfig::miscConfig.lockAlwaysLock && status.source != gpioLockAction::HOMEKIT) {
             lockTargetState->setVal(lockStates::LOCKED);
@@ -430,9 +377,6 @@ void gpio_task(void* arg) {
               digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionLockState);
             }
             lockCurrentState->setVal(lockStates::LOCKED);
-            if (client != nullptr) {
-              esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::LOCKED).c_str(), 1, 0, false);
-            } else LOG(W, "MQTT Client not initialized, cannot publish message");
           } else {
             int currentState = lockCurrentState->getVal();
             if (status.source != gpioLockAction::HOMEKIT) {
@@ -442,9 +386,6 @@ void gpio_task(void* arg) {
               digitalWrite(espConfig::miscConfig.gpioActionPin, currentState == lockStates::UNLOCKED ? espConfig::miscConfig.gpioActionLockState : espConfig::miscConfig.gpioActionUnlockState);
             }
             lockCurrentState->setVal(!currentState);
-            if (client != nullptr) {
-              esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockCurrentState->getNewVal()).c_str(), 1, 0, false);
-            } else LOG(W, "MQTT Client not initialized, cannot publish message");
             if ((static_cast<uint8_t>(espConfig::miscConfig.gpioActionMomentaryEnabled) & status.source) && currentState == lockStates::LOCKED) {
               delay(espConfig::miscConfig.gpioActionMomentaryTimeout);
               lockTargetState->setVal(currentState);
@@ -452,9 +393,6 @@ void gpio_task(void* arg) {
                 digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionLockState);
               }
               lockCurrentState->setVal(currentState);
-              if (client != nullptr) {
-                esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockCurrentState->getNewVal()).c_str(), 1, 0, false);
-              } else LOG(W, "MQTT Client not initialized, cannot publish message");
             }
           }
         } else if (status.action == 2) {
@@ -551,7 +489,7 @@ struct LockMechanism : Service::LockMechanism
   const char* TAG = "LockMechanism";
 
   LockMechanism() : Service::LockMechanism() {
-    LOG(I, "Configuring LockMechanism"); // initialization message
+    LOG(I, "Configuring LockMechanism");
     lockCurrentState = new Characteristic::LockCurrentState(1, true);
     lockTargetState = new Characteristic::LockTargetState(1, true);
     memcpy(ecpData + 8, readerData.reader_gid.data(), readerData.reader_gid.size());
@@ -563,7 +501,7 @@ struct LockMechanism : Service::LockMechanism
         digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionUnlockState);
       }
     }
-  } // end constructor
+  }
 
   boolean update() {
     int targetState = lockTargetState->getNewVal();
@@ -575,24 +513,6 @@ struct LockMechanism : Service::LockMechanism
       const gpioLockAction gpioAction{ .source = gpioLockAction::HOMEKIT, .action = 0 };
       xQueueSend(gpio_lock_handle, &gpioAction, 0);
     }
-    int currentState = lockCurrentState->getNewVal();
-    if (client != nullptr) {
-      if (espConfig::miscConfig.gpioActionPin == 255) {
-        if (targetState != currentState) {
-          esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), targetState == lockStates::UNLOCKED ? std::to_string(lockStates::UNLOCKING).c_str() : std::to_string(lockStates::LOCKING).c_str(), 1, 1, true);
-        } else {
-          esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(currentState).c_str(), 1, 1, true);
-        }
-      }
-      if (espConfig::mqttData.lockEnableCustomState) {
-        if (targetState == lockStates::UNLOCKED) {
-          esp_mqtt_client_publish(client, espConfig::mqttData.lockCustomStateTopic.c_str(), std::to_string(espConfig::mqttData.customLockActions["UNLOCK"]).c_str(), 0, 0, false);
-        } else if (targetState == lockStates::LOCKED) {
-          esp_mqtt_client_publish(client, espConfig::mqttData.lockCustomStateTopic.c_str(), std::to_string(espConfig::mqttData.customLockActions["LOCK"]).c_str(), 0, 0, false);
-        }
-      }
-    } else LOG(W, "MQTT Client not initialized, cannot publish message");
-
     return (true);
   }
 };
@@ -605,7 +525,7 @@ struct NFCAccess : Service::NFCAccess
   const char* TAG = "NFCAccess";
 
   NFCAccess() : Service::NFCAccess() {
-    LOG(I, "Configuring NFCAccess"); // initialization message
+    LOG(I, "Configuring NFCAccess");
     configurationState = new Characteristic::ConfigurationState();
     nfcControlPoint = new Characteristic::NFCAccessControlPoint();
     TLV8 conf(NULL, 0);
@@ -766,224 +686,6 @@ void print_issuers(const char* buf) {
   }
 }
 
-/**
- * The function `set_custom_state_handler` translate the custom states to their HomeKit counterpart
- * updating the state of the lock and publishes the new state to the `MQTT_STATE_TOPIC` MQTT topic.
- *
- * @param client The `client` parameter in the `set_custom_state_handler` function is of type
- * `esp_mqtt_client_handle_t`, which is a handle to the MQTT client object for this event. This
- * parameter is used to interact with the MQTT client
- * @param state The `state` parameter in the `set_custom_state_handler` function represents the
- *  received custom state value
- */
-void set_custom_state_handler(esp_mqtt_client_handle_t client, int state) {
-  if (espConfig::mqttData.customLockStates["C_UNLOCKING"] == state) {
-    lockTargetState->setVal(lockStates::UNLOCKED);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::UNLOCKING).c_str(), 0, 1, true);
-    return;
-  } else if (espConfig::mqttData.customLockStates["C_LOCKING"] == state) {
-    lockTargetState->setVal(lockStates::LOCKED);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::LOCKING).c_str(), 0, 1, true);
-    return;
-  } else if (espConfig::mqttData.customLockStates["C_UNLOCKED"] == state) {
-    if (espConfig::miscConfig.gpioActionPin != 255) {
-      digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionUnlockState);
-    }
-    lockCurrentState->setVal(lockStates::UNLOCKED);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::UNLOCKED).c_str(), 0, 1, true);
-    return;
-  } else if (espConfig::mqttData.customLockStates["C_LOCKED"] == state) {
-    if (espConfig::miscConfig.gpioActionPin != 255) {
-      digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionLockState);
-    }
-    lockCurrentState->setVal(lockStates::LOCKED);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::LOCKED).c_str(), 0, 1, true);
-    return;
-  } else if (espConfig::mqttData.customLockStates["C_JAMMED"] == state) {
-    lockCurrentState->setVal(lockStates::JAMMED);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::JAMMED).c_str(), 0, 1, true);
-    return;
-  } else if (espConfig::mqttData.customLockStates["C_UNKNOWN"] == state) {
-    lockCurrentState->setVal(lockStates::UNKNOWN);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::UNKNOWN).c_str(), 0, 1, true);
-    return;
-  }
-  LOG(D, "Update state failed! Recv value not valid");
-}
-
-void set_state_handler(esp_mqtt_client_handle_t client, int state) {
-  switch (state) {
-  case lockStates::UNLOCKED:
-    if (espConfig::miscConfig.gpioActionPin != 255) {
-      digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionUnlockState);
-    }
-    lockTargetState->setVal(state);
-    lockCurrentState->setVal(state);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::UNLOCKED).c_str(), 0, 1, true);
-    if (espConfig::mqttData.lockEnableCustomState) {
-      esp_mqtt_client_publish(client, espConfig::mqttData.lockCustomStateTopic.c_str(), std::to_string(espConfig::mqttData.customLockActions["UNLOCK"]).c_str(), 0, 0, false);
-    }
-    break;
-  case lockStates::LOCKED:
-    if (espConfig::miscConfig.gpioActionPin != 255) {
-      digitalWrite(espConfig::miscConfig.gpioActionPin, espConfig::miscConfig.gpioActionLockState);
-    }
-    lockTargetState->setVal(state);
-    lockCurrentState->setVal(state);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockStates::LOCKED).c_str(), 0, 1, true);
-    if (espConfig::mqttData.lockEnableCustomState) {
-      esp_mqtt_client_publish(client, espConfig::mqttData.lockCustomStateTopic.c_str(), std::to_string(espConfig::mqttData.customLockActions["LOCK"]).c_str(), 0, 0, false);
-    }
-    break;
-  case lockStates::JAMMED:
-  case lockStates::UNKNOWN:
-    lockCurrentState->setVal(state);
-    esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(state).c_str(), 0, 1, true);
-    break;
-  default:
-    LOG(D, "Update state failed! Recv value not valid");
-    break;
-  }
-}
-
-void mqtt_connected_event(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-  esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
-  esp_mqtt_client_handle_t client = event->client;
-  const esp_app_desc_t* app_desc = esp_app_get_description();
-  std::string app_version = app_desc->version;
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BT);
-  char macStr[18] = { 0 };
-  sprintf(macStr, "%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3]);
-  std::string serialNumber = "HK-";
-  serialNumber.append(macStr);
-  LOG(I, "MQTT connected");
-  if (espConfig::mqttData.hassMqttDiscoveryEnabled) {
-    json payload;
-    payload["topic"] = espConfig::mqttData.hkTopic.c_str();
-    payload["value_template"] = "{{ value_json.uid }}";
-    json device;
-    device["name"] = espConfig::miscConfig.deviceName.c_str();
-    char identifier[18];
-    sprintf(identifier, "%.2s%.2s%.2s%.2s%.2s%.2s", HAPClient::accessory.ID, HAPClient::accessory.ID + 3, HAPClient::accessory.ID + 6, HAPClient::accessory.ID + 9, HAPClient::accessory.ID + 12, HAPClient::accessory.ID + 15);
-    std::string id = identifier;
-    device["identifiers"].push_back(id);
-    device["identifiers"].push_back(serialNumber);
-    device["manufacturer"] = "rednblkx";
-    device["model"] = "HomeKey-ESP32";
-    device["sw_version"] = app_version.c_str();
-    device["serial_number"] = serialNumber;
-    payload["device"] = device;
-    std::string bufferpub = payload.dump();
-    std::string rfidTopic;
-    rfidTopic.append("homeassistant/tag/").append(espConfig::mqttData.mqttClientId).append("/rfid/config");
-    if (!espConfig::mqttData.nfcTagNoPublish) {
-      esp_mqtt_client_publish(client, rfidTopic.c_str(), bufferpub.c_str(), bufferpub.length(), 1, true);
-    }
-    payload = json();
-    payload["topic"] = espConfig::mqttData.hkTopic;
-    payload["value_template"] = "{{ value_json.issuerId }}";
-    payload["device"] = device;
-    bufferpub = payload.dump();
-    std::string issuerTopic;
-    issuerTopic.append("homeassistant/tag/").append(espConfig::mqttData.mqttClientId).append("/hkIssuer/config");
-    esp_mqtt_client_publish(client, issuerTopic.c_str(), bufferpub.c_str(), bufferpub.length(), 1, true);
-    payload = json();
-    payload["topic"] = espConfig::mqttData.hkTopic;
-    payload["value_template"] = "{{ value_json.endpointId }}";
-    payload["device"] = device;
-    bufferpub = payload.dump();
-    std::string endpointTopic;
-    endpointTopic.append("homeassistant/tag/").append(espConfig::mqttData.mqttClientId).append("/hkEndpoint/config");
-    esp_mqtt_client_publish(client, endpointTopic.c_str(), bufferpub.c_str(), bufferpub.length(), 1, true);
-    payload = json();
-    payload["name"] = "Lock";
-    payload["state_topic"] = espConfig::mqttData.lockStateTopic.c_str();
-    payload["command_topic"] = espConfig::mqttData.lockStateCmd.c_str();
-    payload["payload_lock"] = "1";
-    payload["payload_unlock"] = "0";
-    payload["state_locked"] = "1";
-    payload["state_unlocked"] = "0";
-    payload["state_unlocking"] = "4";
-    payload["state_locking"] = "5";
-    payload["state_jammed"] = "2";
-    payload["availability_topic"] = espConfig::mqttData.lwtTopic.c_str();
-    payload["unique_id"] = id;
-    payload["device"] = device;
-    payload["retain"] = "false";
-    bufferpub = payload.dump();
-    std::string lockConfigTopic;
-    lockConfigTopic.append("homeassistant/lock/").append(espConfig::mqttData.mqttClientId.c_str()).append("/lock/config");
-    esp_mqtt_client_publish(client, lockConfigTopic.c_str(), bufferpub.c_str(), bufferpub.length(), 1, true);
-    LOG(D, "MQTT PUBLISHED DISCOVERY");
-  }
-  esp_mqtt_client_publish(client, espConfig::mqttData.lwtTopic.c_str(), "online", 6, 1, true);
-  if (espConfig::mqttData.lockEnableCustomState) {
-    esp_mqtt_client_subscribe(client, espConfig::mqttData.lockCustomStateCmd.c_str(), 0);
-  }
-  if (espConfig::miscConfig.proxBatEnabled) {
-    esp_mqtt_client_subscribe(client, espConfig::mqttData.btrLvlCmdTopic.c_str(), 0);
-  }
-  esp_mqtt_client_subscribe(client, espConfig::mqttData.lockStateCmd.c_str(), 0);
-  esp_mqtt_client_subscribe(client, espConfig::mqttData.lockCStateCmd.c_str(), 0);
-  esp_mqtt_client_subscribe(client, espConfig::mqttData.lockTStateCmd.c_str(), 0);
-}
-
-void mqtt_data_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-  // ESP_LOGD(TAG, "Event dispatched from callback type=%d", event_id);
-  esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
-  esp_mqtt_client_handle_t client = event->client;
-  std::string topic(event->topic, event->topic + event->topic_len);
-  std::string data(event->data, event->data + event->data_len);
-  LOG(D, "Received message in topic \"%s\": %s", topic.c_str(), data.c_str());
-  int state = atoi(data.c_str());
-  if (!strcmp(espConfig::mqttData.lockCustomStateCmd.c_str(), topic.c_str())) {
-    set_custom_state_handler(client, state);
-  } else if (!strcmp(espConfig::mqttData.lockStateCmd.c_str(), topic.c_str())) {
-    set_state_handler(client, state);
-  } else if (!strcmp(espConfig::mqttData.lockTStateCmd.c_str(), topic.c_str())) {
-    if (state == lockStates::UNLOCKED || state == lockStates::LOCKED) {
-      lockTargetState->setVal(state);
-      esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), state == lockStates::UNLOCKED ? std::to_string(lockStates::UNLOCKING).c_str() : std::to_string(lockStates::LOCKING).c_str(), 0, 1, true);
-    }
-  } else if (!strcmp(espConfig::mqttData.lockCStateCmd.c_str(), topic.c_str())) {
-    if (state == lockStates::UNLOCKED || state == lockStates::LOCKED || state == lockStates::JAMMED || state == lockStates::UNKNOWN) {
-      lockCurrentState->setVal(state);
-      esp_mqtt_client_publish(client, espConfig::mqttData.lockStateTopic.c_str(), std::to_string(lockCurrentState->getVal()).c_str(), 0, 1, true);
-    }
-  } else if (!strcmp(espConfig::mqttData.btrLvlCmdTopic.c_str(), topic.c_str())) {
-    btrLevel->setVal(state);
-    if (state <= espConfig::miscConfig.btrLowStatusThreshold) {
-      statusLowBtr->setVal(1);
-    } else {
-      statusLowBtr->setVal(0);
-    }
-  }
-}
-
-/**
- * The function `mqtt_app_start` initializes and starts an MQTT client with specified configuration
- * parameters.
- */
-static void mqtt_app_start(void) {
-  esp_mqtt_client_config_t mqtt_cfg {};
-  mqtt_cfg.broker.address.hostname = espConfig::mqttData.mqttBroker.c_str();
-  mqtt_cfg.broker.address.port = espConfig::mqttData.mqttPort;
-  mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_TCP;
-  mqtt_cfg.credentials.client_id = espConfig::mqttData.mqttClientId.c_str();
-  mqtt_cfg.credentials.username = espConfig::mqttData.mqttUsername.c_str();
-  mqtt_cfg.credentials.authentication.password = espConfig::mqttData.mqttPassword.c_str();
-  mqtt_cfg.session.last_will.topic = espConfig::mqttData.lwtTopic.c_str();
-  mqtt_cfg.session.last_will.msg = "offline";
-  mqtt_cfg.session.last_will.msg_len = 7;
-  mqtt_cfg.session.last_will.retain = true;
-  mqtt_cfg.session.last_will.qos = 1;
-  client = esp_mqtt_client_init(&mqtt_cfg);
-  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_event, client);
-  esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, client);
-  esp_mqtt_client_start(client);
-}
-
 void notFound(AsyncWebServerRequest* request) {
   request->send(404, "text/plain", "Not found");
 }
@@ -1042,16 +744,13 @@ void setupWeb() {
   dataProvision->setMethod(HTTP_GET);
   dataProvision->onRequest([](AsyncWebServerRequest* req) {
     if (req->hasParam("type")) {
-    json serializedData;
+      json serializedData;
       AsyncWebParameter* data = req->getParam(0);
-      std::array<std::string, 4> pages = {"mqtt", "actions", "misc", "hkinfo"};
-      if (std::equal(data->value().begin(), data->value().end(), pages[0].begin(), pages[0].end())) {
-        LOG(D, "MQTT CONFIG REQ");
-        serializedData = espConfig::mqttData;
-      } else if (std::equal(data->value().begin(), data->value().end(),pages[1].begin(), pages[1].end()) || std::equal(data->value().begin(), data->value().end(),pages[2].begin(), pages[2].end())) {
+      std::array<std::string, 3> pages = {"actions", "misc", "hkinfo"};
+      if (std::equal(data->value().begin(), data->value().end(),pages[0].begin(), pages[0].end()) || std::equal(data->value().begin(), data->value().end(),pages[1].begin(), pages[1].end())) {
         LOG(D, "ACTIONS CONFIG REQ");
         serializedData = espConfig::miscConfig;
-      } else if (std::equal(data->value().begin(), data->value().end(),pages[3].begin(), pages[3].end())) {
+      } else if (std::equal(data->value().begin(), data->value().end(),pages[2].begin(), pages[2].end())) {
         LOG(D, "HK DATA REQ");
         json inputData = readerData;
         if (inputData.contains("group_identifier")) {
@@ -1441,27 +1140,8 @@ void mqttConfigReset(const char* buf) {
 
 void wifiCallback(int status) {
   if (status == 1) {
-    if (espConfig::mqttData.mqttBroker.size() >= 7 && espConfig::mqttData.mqttBroker.size() <= 16 && !std::equal(espConfig::mqttData.mqttBroker.begin(), espConfig::mqttData.mqttBroker.end(), "0.0.0.0")) {
-      mqtt_app_start();
-    }
     setupWeb();
   }
-}
-
-void mqtt_publish(std::string topic, std::string payload, uint8_t qos, bool retain) {
-  if (client != nullptr) {
-    esp_mqtt_client_publish(client, topic.c_str(), payload.c_str(), payload.length(), 0, retain);
-  } else LOG(W, "MQTT Client not initialized, cannot publish message");
-}
-
-std::string hex_representation(const std::vector<uint8_t>& v) {
-  std::string hex_tmp;
-  for (auto x : v) {
-    std::ostringstream oss;
-    oss << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (unsigned)x;
-    hex_tmp += oss.str();
-  }
-  return hex_tmp;
 }
 
 void nfc_retry(void* arg) {
@@ -1564,7 +1244,7 @@ void nfc_thread_entry(void* arg) {
             xQueueSend(gpio_led_handle, &status, 0);
           }
           if (hkAltActionActive) {
-            mqtt_publish(espConfig::mqttData.hkAltActionTopic, "alt_action", 0, false);
+            // mqtt_publish(espConfig::mqttData.hkAltActionTopic, "alt_action", 0, false);
           }
           json payload;
           payload["issuerId"] = hex_representation(std::get<0>(authResult));
@@ -1572,32 +1252,26 @@ void nfc_thread_entry(void* arg) {
           payload["readerId"] = hex_representation(readerData.reader_id);
           payload["homekey"] = true;
           std::string payloadStr = payload.dump();
-          mqtt_publish(espConfig::mqttData.hkTopic, payloadStr, 0, false);
+          // mqtt_publish(espConfig::mqttData.hkTopic, payloadStr, 0, false);
           if (espConfig::miscConfig.lockAlwaysUnlock) {
             if (espConfig::miscConfig.gpioActionPin == 255 || !espConfig::miscConfig.hkGpioControlledState) {
               lockCurrentState->setVal(lockStates::UNLOCKED);
               lockTargetState->setVal(lockStates::UNLOCKED);
-              mqtt_publish(espConfig::mqttData.lockStateTopic, std::to_string(lockStates::UNLOCKED), 1, true);
-            }
-            if (espConfig::mqttData.lockEnableCustomState) {
-              mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["UNLOCK"]), 0, false);
+              // mqtt_publish(espConfig::mqttData.lockStateTopic, std::to_string(lockStates::UNLOCKED), 1, true);
             }
           } else if (espConfig::miscConfig.lockAlwaysLock) {
             if (espConfig::miscConfig.gpioActionPin == 255 || espConfig::miscConfig.hkGpioControlledState) {
               lockCurrentState->setVal(lockStates::LOCKED);
               lockTargetState->setVal(lockStates::LOCKED);
-              mqtt_publish(espConfig::mqttData.lockStateTopic, std::to_string(lockStates::LOCKED), 1, true);
-            }
-            if (espConfig::mqttData.lockEnableCustomState) {
-              mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["LOCK"]), 0, false);
+              // mqtt_publish(espConfig::mqttData.lockStateTopic, std::to_string(lockStates::LOCKED), 1, true);
             }
           } else {
             int currentState = lockCurrentState->getVal();
             if (espConfig::mqttData.lockEnableCustomState) {
               if (currentState == lockStates::UNLOCKED) {
-                mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["LOCK"]), 0, false);
+                // mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["LOCK"]), 0, false);
               } else if (currentState == lockStates::LOCKED) {
-                mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["UNLOCK"]), 0, false);
+                // mqtt_publish(espConfig::mqttData.lockCustomStateTopic, std::to_string(espConfig::mqttData.customLockActions["UNLOCK"]), 0, false);
               }
             }
           }
@@ -1630,9 +1304,7 @@ void nfc_thread_entry(void* arg) {
         payload["uid"] = hex_representation(std::vector<uint8_t>(uid, uid + uidLen));
         payload["homekey"] = false;
         std::string payload_dump = payload.dump();
-        if (client != nullptr) {
-          esp_mqtt_client_publish(client, espConfig::mqttData.hkTopic.c_str(), payload_dump.c_str(), 0, 0, false);
-        } else LOG(W, "MQTT Client not initialized, cannot publish message");
+        // mqtt_publish(espConfig::mqttData.hkTopic.c_str(), payload_dump.c_str(), 0, 0, false);
       }
       vTaskDelay(50 / portTICK_PERIOD_MS);
       nfc->inRelease();
@@ -1702,36 +1374,11 @@ void setup() {
       LOG(I, "Reader Data loaded from NVS");
     }
   }
-  if (!nvs_get_blob(savedData, "MQTTDATA", NULL, &len)) {
-    std::vector<uint8_t> dataBuf(len);
-    nvs_get_blob(savedData, "MQTTDATA", dataBuf.data(), &len);
-    LOG(D, "NVS MQTTDATA LENGTH: %d", len);
-    ESP_LOG_BUFFER_HEX_LEVEL(TAG, dataBuf.data(), dataBuf.size(), ESP_LOG_VERBOSE);
-    auto isValidJson = nlohmann::json::accept(dataBuf);
-    if (isValidJson) {
-      nlohmann::json data = nlohmann::json::parse(dataBuf);
-      if (!data.contains("lwtTopic") && data.contains("mqttClientId")) {
-        std::string lwt = data["mqttClientId"];
-        lwt.append("/status");
-        data["lwtTopic"] = lwt;
-      }
-      if (!data.is_discarded()) {
-        data.get_to<espConfig::mqttConfig_t>(espConfig::mqttData);
-        LOG(I, "MQTT Config loaded from NVS");
-      }
-    } else {
-      nlohmann::json data = nlohmann::json::from_msgpack(dataBuf);
-      if (!data.is_discarded()) {
-        data.get_to<espConfig::mqttConfig_t>(espConfig::mqttData);
-        LOG(I, "MQTT Config loaded from NVS");
-      }
-    }
-  }
   if (!nvs_get_blob(savedData, "MISCDATA", NULL, &len)) {
     std::vector<uint8_t> dataBuf(len);
     nvs_get_blob(savedData, "MISCDATA", dataBuf.data(), &len);
     std::string str(dataBuf.begin(), dataBuf.end());
-    LOG(D, "NVS MQTTDATA LENGTH: %d", len);
+    LOG(D, "NVS MISCDATA LENGTH: %d", len);
     ESP_LOG_BUFFER_HEX_LEVEL(TAG, dataBuf.data(), dataBuf.size(), ESP_LOG_VERBOSE);
     auto isValidJson = nlohmann::json::accept(dataBuf);
     if (isValidJson) {
@@ -1832,11 +1479,9 @@ void setup() {
   homeSpan.setHostNameSuffix(macStr);
   homeSpan.begin(Category::Locks, espConfig::miscConfig.deviceName.c_str(), "HK-", "HomeKey-ESP32");
 
-  new SpanUserCommand('D', "Delete Home Key Data", deleteReaderData);
   new SpanUserCommand('L', "Set Log Level", setLogLevel);
   new SpanUserCommand('F', "Set HomeKey Flow", setFlow);
   new SpanUserCommand('P', "Print Issuers", print_issuers);
-  new SpanUserCommand('M', "Erase MQTT Config and restart", mqttConfigReset);
   new SpanUserCommand('R', "Remove Endpoints", [](const char*) {
     for (auto&& issuer : readerData.issuers) {
       issuer.endpoints.clear();

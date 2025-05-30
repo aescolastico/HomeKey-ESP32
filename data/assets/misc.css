@@ -133,9 +133,6 @@ div[class$="-hidden-body"] {
         flex-wrap: wrap;
         justify-content: center;
     }
-    #mqtt-broker, #mqtt-topics {
-        width: auto;
-    }
     .cards-container {
         flex-direction: column;
     }
@@ -178,10 +175,6 @@ div[class$="-hidden-body"] {
         opacity: .7;
     }
 
-    #mqtt-broker-con, #mqtt-topics-container {
-        min-width: 20rem;
-        max-width: 25rem;
-    }
     .cards-container {
         align-items: flex-start;
     }

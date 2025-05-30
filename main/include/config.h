@@ -40,29 +40,6 @@ enum class gpioMomentaryStateStatus : uint8_t
   M_HOME_HK = (uint8_t)(M_HOME | M_HK)
 };
 
-// MQTT Broker Settings
-#define MQTT_HOST "" //IP adress of mqtt broker
-#define MQTT_PORT 1883 //Port of mqtt broker
-#define MQTT_CLIENTID "" //client-id to connect to mqtt broker
-#define MQTT_USERNAME ""  //username to connect to mqtt broker
-#define MQTT_PASSWORD ""  //password to connect to mqtt broker
-
-//MQTT Flags
-#define MQTT_CUSTOM_STATE_ENABLED 0 // Flag to enable the use of custom states and relevant MQTT Topics
-#define MQTT_DISCOVERY true //Enable or disable discovery for home assistant tags functionality, set to true to enable.
-
-// MQTT Topics
-#define MQTT_LWT_TOPIC "status"
-#define MQTT_CUSTOM_STATE_TOPIC "homekit/custom_state" // MQTT Topic for publishing custom lock state
-#define MQTT_CUSTOM_STATE_CTRL_TOPIC "homekit/set_custom_state" // MQTT Control Topic with custom lock state
-#define MQTT_AUTH_TOPIC "homekey/auth" // MQTT Topic for publishing HomeKey authentication data or RFID UID
-#define MQTT_SET_STATE_TOPIC "homekit/set_state" // MQTT Control Topic for the HomeKit lock state (current and target)
-#define MQTT_SET_TARGET_STATE_TOPIC "homekit/set_target_state" // MQTT Control Topic for the HomeKit lock target state
-#define MQTT_SET_CURRENT_STATE_TOPIC "homekit/set_current_state" // MQTT Control Topic for the HomeKit lock current state
-#define MQTT_STATE_TOPIC "homekit/state" // MQTT Topic for publishing the HomeKit lock target state
-#define MQTT_PROX_BAT_TOPIC "homekit/set_battery_lvl" // MQTT Topic for publishing the HomeKit lock target state
-#define MQTT_HK_ALT_ACTION_TOPIC "alt_action" // MQTT Topic for publishing the Alt Action
-
 // Miscellaneous
 #define HOMEKEY_COLOR TAN
 #define SETUP_CODE "46637726"  // HomeKit Setup Code (only for reference, has to be changed during WiFi Configuration or from WebUI)
