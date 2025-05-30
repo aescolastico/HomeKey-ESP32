@@ -21,6 +21,7 @@
 #include "NFC_SERV_CHARS.h"
 #include <mbedtls/sha256.h>
 #include <esp_mac.h>
+#include "mqtt_stub.h"
 
 const char* TAG = "MAIN";
 
@@ -814,18 +815,13 @@ void setupWeb() {
   dataClear->onRequest([](AsyncWebServerRequest* req) {
     if (req->hasParam("type")) {
       AsyncWebParameter* data = req->getParam(0);
-      std::array<std::string, 3> pages = { "mqtt", "actions", "misc" };
+      std::array<std::string, 2> pages = { "actions", "misc" };  // Remove "mqtt" from pages array
       if (std::equal(data->value().begin(), data->value().end(), pages[0].begin(), pages[0].end())) {
-        LOG(D, "MQTT CONFIG SEL");
-        nvs_erase_key(savedData, "MQTTDATA");
-        espConfig::mqttData = {};
-        req->send(200, "text/plain", "200 Success");
-      } else if (std::equal(data->value().begin(), data->value().end(), pages[1].begin(), pages[1].end())) {
         LOG(D, "ACTIONS CONFIG SEL");
         nvs_erase_key(savedData, "MISCDATA");
         espConfig::miscConfig = {};
         req->send(200, "text/plain", "200 Success");
-      } else if (std::equal(data->value().begin(), data->value().end(), pages[2].begin(), pages[2].end())) {
+      } else if (std::equal(data->value().begin(), data->value().end(), pages[1].begin(), pages[1].end())) {
         LOG(D, "MISC CONFIG SEL");
         nvs_erase_key(savedData, "MISCDATA");
         espConfig::miscConfig = {};
@@ -855,20 +851,16 @@ void setupWeb() {
     if (req->hasParam("type") && serializedData) {
       AsyncWebParameter* data = req->getParam(0);
       json configData;
-      std::array<std::string, 3> pages = { "mqtt", "actions", "misc" };
+      std::array<std::string, 2> pages = { "actions", "misc" };  // Remove mqtt
       uint8_t selConfig;
       if (std::equal(data->value().begin(), data->value().end(), pages[0].begin(), pages[0].end())) {
-        LOG(D, "MQTT CONFIG SEL");
-        configData = espConfig::mqttData;
-        selConfig = 0;
-      } else if (std::equal(data->value().begin(), data->value().end(), pages[1].begin(), pages[1].end())) {
         LOG(D, "ACTIONS CONFIG SEL");
         configData = espConfig::miscConfig;
-        selConfig = 1;
-      } else if (std::equal(data->value().begin(), data->value().end(), pages[2].begin(), pages[2].end())) {
+        selConfig = 0;
+      } else if (std::equal(data->value().begin(), data->value().end(), pages[1].begin(), pages[1].end())) {
         LOG(D, "MISC CONFIG SEL");
         configData = espConfig::miscConfig;
-        selConfig = 2;
+        selConfig = 1;
       } else {
         req->send(400);
         return;
@@ -1130,12 +1122,6 @@ void setupWeb() {
   }
   webServer.onNotFound(notFound);
   webServer.begin();
-}
-
-void mqttConfigReset(const char* buf) {
-  nvs_erase_key(savedData, "MQTTDATA");
-  nvs_commit(savedData);
-  ESP.restart();
 }
 
 void wifiCallback(int status) {
@@ -1536,4 +1522,16 @@ void setup() {
 void loop() {
   homeSpan.poll();
   vTaskDelay(5);
+}
+
+// Add hex_representation function near the top with other utility functions
+std::string hex_representation(const std::vector<uint8_t>& data) {
+    std::string result;
+    result.reserve(data.size() * 2);
+    for (uint8_t byte : data) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02x", byte);
+        result += hex;
+    }
+    return result;
 }
